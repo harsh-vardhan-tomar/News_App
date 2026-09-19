@@ -1,0 +1,63 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NewsScope | Latest News</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="header">
+    <div class="container nav">
+      <h1>News<span>Scope</span></h1>
+      <div id="locationText">Detecting location...</div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">YOUR DAILY NEWS HUB</p>
+        <h2>Latest Headlines,<br>From Across the Web.</h2>
+        <p class="subtitle">
+          Discover the latest news from sources and blogs.
+        </p>
+      </div>
+      <button id="refreshBtn">↻ Refresh</button>
+    </section>
+
+    <section class="controls">
+      <input
+        type="search"
+        id="searchInput"
+        placeholder="Search news..."
+      >
+
+      <select id="categorySelect">
+        <option value="general">General</option>
+        <option value="business">Business</option>
+        <option value="technology">Technology</option>
+        <option value="sports">Sports</option>
+        <option value="science">Science</option>
+        <option value="health">Health</option>
+        <option value="entertainment">Entertainment</option>
+      </select>
+
+      <button id="searchBtn">Search</button>
+    </section>
+
+    <p id="status">Loading latest headlines...</p>
+
+    <section id="newsGrid" class="news-grid"></section>
+  </main>
+
+  <footer>
+    <p>NewsScope • Powered by NewsAPI</p>
+  </footer>
+
+<script src="config.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
