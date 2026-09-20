@@ -1,4 +1,4 @@
-# 📰 NewsPulse - Dynamic News Web Application
+# 📰 NewsScope - Dynamic News Web Application
 
 A modern and responsive news web application built with **Vanilla JavaScript** and **NewsAPI**. It allows users to browse top headlines, search for specific topics, filter by categories, and automatically detects location for regional news.
 
