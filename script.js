@@ -4,13 +4,41 @@ const locationText = document.getElementById("locationText");
 
 const searchInput = document.getElementById("searchInput");
 const categorySelect = document.getElementById("categorySelect");
+const regionSelect = document.getElementById("regionSelect");
 
 const searchBtn = document.getElementById("searchBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 
+const headlinesSection = document.getElementById("headlines");
+const headlinesBody = document.getElementById("headlinesBody");
+const scrollStatus = document.getElementById("scrollStatus");
+const backToTop = document.getElementById("backToTop");
+
+const PAGE_SIZE = 30;
+const HEADLINE_COUNT = 5;      // first stories shown in the Top Headlines block
+const FREE_PLAN_LIMIT = 100;   // NewsAPI free plan returns at most 100 results
+const PLACEHOLDER = "https://placehold.co/600x350?text=News";
+
 let currentCountry = "in";
 
-// Detect browser location
+// Pagination / infinite-scroll state
+let state = freshState();
+let requestId = 0; // used to ignore responses from outdated requests
+
+function freshState() {
+  return {
+    page: 0,
+    totalResults: 0,
+    loading: false,
+    done: false,
+    seen: new Set(),
+    loadedCount: 0,
+    fallback: false // true when India has no top-headlines and we use Indian news sites
+  };
+}
+
+// ---------- Location ----------
+
 function getLocation() {
   if (!navigator.geolocation) {
     locationText.textContent = "Location unavailable • India news";
@@ -30,68 +58,13 @@ function getLocation() {
       loadNews();
     },
     () => {
-      locationText.textContent =
-        "Location denied • India news";
-
+      locationText.textContent = "Location denied • India news";
       loadNews();
     }
   );
 }
 
-// Render news cards
-function renderNews(articles) {
-  newsGrid.innerHTML = "";
-
-  if (!articles || articles.length === 0) {
-    newsGrid.innerHTML =
-      '<div class="empty">No news found.</div>';
-    return;
-  }
-
-  articles.forEach((article) => {
-    const card = document.createElement("article");
-
-    card.className = "news-card";
-
-    const image = article.urlToImage ||
-      "https://placehold.co/600x350?text=News";
-
-    const title = article.title || "Untitled article";
-
-    const description = article.description ||
-      "Read the complete story from the original source.";
-
-    const source = article.source?.name ||
-      "Unknown source";
-
-    card.innerHTML = `
-      <img
-        src="${image}"
-        alt="News image"
-        onerror="this.src='https://placehold.co/600x350?text=News';"
-      >
-
-      <div class="news-content">
-        <div class="source">${escapeHTML(source)}</div>
-
-        <h3>${escapeHTML(title)}</h3>
-
-        <p>${escapeHTML(description)}</p>
-
-        <a
-          class="read-more"
-          href="${article.url}"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Read full article →
-        </a>
-      </div>
-    `;
-
-    newsGrid.appendChild(card);
-  });
-}
+// ---------- Helpers ----------
 
 // Prevent HTML injection in text fields
 function escapeHTML(value) {
@@ -103,64 +76,362 @@ function escapeHTML(value) {
     .replaceAll("'", "&#039;");
 }
 
-// Fetch news from API
-async function loadNews() {
-  if (API_KEY === "YOUR_NEWSAPI_KEY") {
-    statusText.textContent =
-      "Add your NewsAPI key in script.js.";
+// Only allow http(s) links / images
+function safeUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
 
-    newsGrid.innerHTML =
-      '<div class="empty">API key required.</div>';
+function timeAgo(dateString) {
+  const time = new Date(dateString).getTime();
+  if (!time) return "";
 
+  const minutes = Math.max(1, Math.round((Date.now() - time) / 60000));
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function isValidArticle(article) {
+  return (
+    article &&
+    article.title &&
+    article.title !== "[Removed]" &&
+    safeUrl(article.url)
+  );
+}
+
+function attachImageFallback(root) {
+  root.querySelectorAll("img").forEach((img) => {
+    img.addEventListener(
+      "error",
+      () => { img.src = PLACEHOLDER; },
+      { once: true } // avoid an endless loop if the placeholder fails too
+    );
+  });
+}
+
+// ---------- Rendering ----------
+
+function renderCards(articles) {
+  articles.forEach((article) => {
+    const card = document.createElement("article");
+    card.className = "news-card";
+
+    const image = safeUrl(article.urlToImage) || PLACEHOLDER;
+    const description =
+      article.description || "Read the complete story from the original source.";
+    const source = article.source?.name || "Unknown source";
+    const ago = timeAgo(article.publishedAt);
+
+    card.innerHTML = `
+      <img src="${escapeHTML(image)}" alt="" loading="lazy">
+
+      <div class="news-content">
+        <div class="source">
+          ${escapeHTML(source)}${ago ? ` <span class="time">• ${ago}</span>` : ""}
+        </div>
+
+        <h3>${escapeHTML(article.title)}</h3>
+
+        <p>${escapeHTML(description)}</p>
+
+        <a
+          class="read-more"
+          href="${escapeHTML(safeUrl(article.url))}"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Read full article →
+        </a>
+      </div>
+    `;
+
+    attachImageFallback(card);
+    newsGrid.appendChild(card);
+  });
+}
+
+function renderHeadlines(articles) {
+  if (articles.length === 0) {
+    headlinesSection.hidden = true;
     return;
   }
 
+  const [lead, ...rest] = articles;
+  const leadImage = safeUrl(lead.urlToImage) || PLACEHOLDER;
+
+  const listItems = rest
+    .map((article, index) => {
+      const ago = timeAgo(article.publishedAt);
+      return `
+        <li>
+          <span class="num">${index + 2}</span>
+          <a href="${escapeHTML(safeUrl(article.url))}" target="_blank" rel="noopener noreferrer">
+            ${escapeHTML(article.title)}
+            <small>${escapeHTML(article.source?.name || "Unknown source")}${ago ? " • " + ago : ""}</small>
+          </a>
+        </li>`;
+    })
+    .join("");
+
+  headlinesBody.innerHTML = `
+    <a class="lead-story" href="${escapeHTML(safeUrl(lead.url))}" target="_blank" rel="noopener noreferrer">
+      <img src="${escapeHTML(leadImage)}" alt="">
+      <div class="lead-overlay">
+        <span class="lead-source">${escapeHTML(lead.source?.name || "Unknown source")}</span>
+        <h3>${escapeHTML(lead.title)}</h3>
+      </div>
+    </a>
+    <ol class="headline-list">${listItems}</ol>
+  `;
+
+  attachImageFallback(headlinesBody);
+  headlinesSection.hidden = false;
+}
+
+function setScrollStatus(message, retry = false) {
+  scrollStatus.innerHTML = "";
+  scrollStatus.textContent = message;
+
+  if (retry) {
+    const button = document.createElement("button");
+    button.textContent = "Retry";
+    button.className = "retry-btn";
+    button.addEventListener("click", () => loadNews({ reset: false }));
+    scrollStatus.appendChild(button);
+  }
+}
+
+// ---------- Data ----------
+
+// Indian news sites, used to keep results India-focused
+const INDIA_DOMAINS = [
+  "timesofindia.indiatimes.com", "thehindu.com", "ndtv.com",
+  "hindustantimes.com", "indianexpress.com", "indiatoday.in",
+  "news18.com", "livemint.com", "economictimes.indiatimes.com",
+  "business-standard.com", "firstpost.com", "deccanherald.com"
+].join(",");
+
+// Keywords used when NewsAPI has no India top-headlines for a category
+const CATEGORY_KEYWORDS = {
+  general: "India",
+  business: "business OR economy OR market OR sensex",
+  technology: "technology OR tech OR AI OR startup",
+  sports: "cricket OR IPL OR sports OR football",
+  science: "science OR research OR ISRO",
+  health: "health OR medical OR hospital",
+  entertainment: "Bollywood OR film OR movie OR entertainment"
+};
+
+function isIndia() {
+  return regionSelect.value === "in";
+}
+
+function buildUrl(page) {
   const searchTerm = searchInput.value.trim();
   const category = categorySelect.value;
+  const paging = `pageSize=${PAGE_SIZE}&page=${page}&apiKey=${API_KEY}`;
 
-  let url =
-    `https://newsapi.org/v2/top-headlines?country=${currentCountry}&category=${category}&pageSize=30&apiKey=${API_KEY}`;
-
+  // Search: limited to Indian news sites when the region is India
   if (searchTerm) {
-    url =
-      `https://newsapi.org/v2/everything?q=${encodeURIComponent(searchTerm)}&language=en&sortBy=publishedAt&pageSize=30&apiKey=${API_KEY}`;
+    const domains = isIndia() ? `&domains=${INDIA_DOMAINS}` : "";
+    return `https://newsapi.org/v2/everything?q=${encodeURIComponent(searchTerm)}&language=en&sortBy=publishedAt${domains}&${paging}`;
   }
 
-  statusText.textContent = "Loading news...";
+  // India has no top-headlines for this category: use Indian news sites instead
+  if (isIndia() && state.fallback) {
+    const q = encodeURIComponent(CATEGORY_KEYWORDS[category] || "India");
+    return `https://newsapi.org/v2/everything?q=${q}&language=en&sortBy=publishedAt&domains=${INDIA_DOMAINS}&${paging}`;
+  }
+
+  // Worldwide has no country filter; India uses country=in
+  const country = isIndia() ? `country=${currentCountry}&` : "";
+
+  return `https://newsapi.org/v2/top-headlines?${country}category=${category}&${paging}`;
+}
+
+// Fetch one page; if India has no top-headlines for the category, retry
+// with Indian news sites (instead of falling back to US-heavy worldwide news)
+async function fetchPage(page) {
+  let response = await fetch(buildUrl(page));
+  let data = await response.json();
+
+  const noResults = response.ok && (data.articles || []).length === 0;
+
+  if (
+    page === 1 && noResults && isIndia() &&
+    !state.fallback && !searchInput.value.trim()
+  ) {
+    state.fallback = true;
+    response = await fetch(buildUrl(page));
+    data = await response.json();
+  }
+
+  return { response, data };
+}
+
+// Label shown in the status line, e.g. `Sports • India`, `Search "ai" • Worldwide`
+function currentLabel() {
+  const region = regionSelect.options[regionSelect.selectedIndex].textContent;
+  const term = searchInput.value.trim();
+  if (term) return `Search "${term}" • ${region}`;
+
+  const option = categorySelect.options[categorySelect.selectedIndex];
+  return `${option.textContent} • ${region}`;
+}
+
+// reset = true  -> start a fresh search/category/refresh
+// reset = false -> load the next page (infinite scroll)
+async function loadNews({ reset = true } = {}) {
+  if (typeof API_KEY === "undefined" || API_KEY === "YOUR_NEWSAPI_KEY") {
+    statusText.textContent = "Add your NewsAPI key in config.js.";
+    newsGrid.innerHTML = '<div class="empty">API key required.</div>';
+    headlinesSection.hidden = true;
+    return;
+  }
+
+  if (reset) {
+    state = freshState();
+    newsGrid.innerHTML = "";
+    headlinesBody.innerHTML = "";
+    headlinesSection.hidden = true;
+    scrollStatus.textContent = "";
+    statusText.textContent = "Loading news...";
+  } else if (state.loading || state.done) {
+    return;
+  }
+
+  const myRequest = ++requestId;
+  const page = state.page + 1;
+  state.loading = true;
+
+  if (!reset) setScrollStatus("Loading more stories...");
 
   try {
-    const response = await fetch(url);
-    const data = await response.json();
+    const { response, data } = await fetchPage(page);
+
+    if (myRequest !== requestId) return; // a newer request replaced this one
+
+    // Free plan cap reached: not a real failure, just the end of the list
+    if (data.code === "maximumResultsReached") {
+      state.done = true;
+      state.loading = false;
+      setScrollStatus("You've reached the end of the available stories.");
+      return;
+    }
 
     if (!response.ok) {
       throw new Error(data.message || "Unable to fetch news");
     }
 
-    renderNews(data.articles);
+    state.page = page;
+    state.totalResults = data.totalResults || 0;
 
-    statusText.textContent =
-      `${data.totalResults || data.articles.length} results found`;
+    // Drop removed/invalid articles and duplicates
+    const fresh = (data.articles || []).filter((article) => {
+      if (!isValidArticle(article) || state.seen.has(article.url)) return false;
+      state.seen.add(article.url);
+      return true;
+    });
 
+    let gridArticles = fresh;
+
+    // Page 1 of top headlines: the first few become the Top Headlines block
+    const isSearch = searchInput.value.trim() !== "";
+    if (page === 1 && !isSearch) {
+      renderHeadlines(fresh.slice(0, HEADLINE_COUNT));
+      gridArticles = fresh.slice(HEADLINE_COUNT);
+    }
+
+    state.loadedCount += fresh.length;
+
+    if (page === 1 && fresh.length === 0) {
+      newsGrid.innerHTML = '<div class="empty">No news found.</div>';
+    } else {
+      renderCards(gridArticles);
+    }
+
+    const reachable = Math.min(state.totalResults, FREE_PLAN_LIMIT);
+    state.done =
+      (data.articles || []).length === 0 || page * PAGE_SIZE >= reachable;
+
+    statusText.textContent = `${currentLabel()} • ${state.totalResults} results found`;
+    setScrollStatus(state.done && state.loadedCount > 0 ? "You've reached the end." : "");
+    state.loading = false;
+
+    // If the page is still too short to scroll, keep filling it
+    requestAnimationFrame(loadMoreIfSentinelVisible);
   } catch (error) {
-    statusText.textContent = "Could not load news.";
+    if (myRequest !== requestId) return;
 
-    newsGrid.innerHTML =
-      `<div class="empty">${escapeHTML(error.message)}</div>`;
+    state.loading = false;
+
+    if (reset) {
+      statusText.textContent = "Could not load news.";
+      newsGrid.innerHTML = `<div class="empty">${escapeHTML(error.message)}</div>`;
+    } else {
+      setScrollStatus("Could not load more stories.", true);
+    }
   }
 }
 
-// Event listeners
-searchBtn.addEventListener("click", loadNews);
+// ---------- Infinite scroll ----------
 
-refreshBtn.addEventListener("click", loadNews);
+function loadMoreIfSentinelVisible() {
+  if (state.loading || state.done || state.page === 0) return;
 
-searchInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    loadNews();
+  const top = scrollStatus.getBoundingClientRect().top;
+  if (top < window.innerHeight + 400) {
+    loadNews({ reset: false });
   }
+}
+
+if ("IntersectionObserver" in window) {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting) loadMoreIfSentinelVisible();
+    },
+    { rootMargin: "400px 0px" }
+  );
+  observer.observe(scrollStatus);
+}
+
+// Fallback for very old browsers
+window.addEventListener("scroll", () => {
+  if (!("IntersectionObserver" in window)) loadMoreIfSentinelVisible();
+  backToTop.hidden = window.scrollY < 600;
+}, { passive: true });
+
+backToTop.addEventListener("click", () => {
+  window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
-categorySelect.addEventListener("change", loadNews);
+// ---------- Event listeners ----------
+
+searchBtn.addEventListener("click", () => loadNews());
+refreshBtn.addEventListener("click", () => loadNews());
+
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") loadNews();
+});
+
+// Choosing a category leaves search mode. Otherwise the search text keeps
+// overriding the category and the news would appear not to change.
+// Switching region keeps the current search/category and reloads
+regionSelect.addEventListener("change", () => loadNews());
+
+categorySelect.addEventListener("change", () => {
+  searchInput.value = "";
+  loadNews();
+});
 
 // Start application
 getLocation();
