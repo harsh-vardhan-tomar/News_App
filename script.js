@@ -14,10 +14,19 @@ const headlinesBody = document.getElementById("headlinesBody");
 const scrollStatus = document.getElementById("scrollStatus");
 const backToTop = document.getElementById("backToTop");
 
+const liveView = document.getElementById("liveView");
+const savedSection = document.getElementById("savedSection");
+const savedGrid = document.getElementById("savedGrid");
+const savedViewBtn = document.getElementById("savedViewBtn");
+const savedViewLabel = document.getElementById("savedViewLabel");
+const savedCountEl = document.getElementById("savedCount");
+const exportSavedBtn = document.getElementById("exportSavedBtn");
+
 const PAGE_SIZE = 30;
 const HEADLINE_COUNT = 5;      // first stories shown in the Top Headlines block
 const FREE_PLAN_LIMIT = 100;   // NewsAPI free plan returns at most 100 results
 const PLACEHOLDER = "https://placehold.co/600x350?text=News";
+const SAVED_KEY = "newsscope_saved_articles";
 
 let currentCountry = "in";
 
@@ -108,6 +117,31 @@ function isValidArticle(article) {
   );
 }
 
+// NewsAPI's `content` field is a longer excerpt than `description`, but on
+// the free/developer plan it's cut short with a trailing marker like
+// "... [+1234 chars]". Strip that marker and merge it with the description
+// to build the fullest summary paragraph the API actually gives us.
+function cleanContent(content) {
+  if (!content) return "";
+  return content.replace(/\s*\[\+\d+\s*chars\]\s*$/i, "").trim();
+}
+
+function buildSummary(article) {
+  const description = (article.description || "").trim();
+  const content = cleanContent(article.content);
+
+  if (!description) {
+    return content || "Read the complete story from the original source.";
+  }
+  if (!content || content === description) return description;
+
+  // Don't duplicate text when one is just a prefix of the other
+  if (content.startsWith(description)) return content;
+  if (description.startsWith(content)) return description;
+
+  return `${description} ${content}`;
+}
+
 function attachImageFallback(root) {
   root.querySelectorAll("img").forEach((img) => {
     img.addEventListener(
@@ -117,6 +151,180 @@ function attachImageFallback(root) {
     );
   });
 }
+
+// ---------- Save for offline reading ----------
+// NewsAPI only returns a title, summary and thumbnail — not the full article
+// body — so "offline reading" means caching that same data locally (not
+// scraping the full text). It works two ways:
+//   1. Saved articles are kept in localStorage and shown in the "Saved" view,
+//      which needs no network connection at all.
+//   2. "Export as file" writes them to a plain-text file the user can keep
+//      and reopen anywhere, even outside the browser.
+
+let savedArticles = loadSaved();
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return []; // corrupted or unavailable storage: start fresh instead of crashing
+  }
+}
+
+function persistSaved() {
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(savedArticles));
+  } catch (error) {
+    console.warn("Could not save article (storage full or unavailable).", error);
+  }
+}
+
+function isSaved(url) {
+  return savedArticles.some((a) => a.url === url);
+}
+
+function toggleSave(article) {
+  const url = safeUrl(article.url);
+  if (!url) return;
+
+  if (isSaved(url)) {
+    savedArticles = savedArticles.filter((a) => a.url !== url);
+  } else {
+    savedArticles.push({
+      title: article.title,
+      description: article.description || "",
+      summary: buildSummary(article),
+      url,
+      urlToImage: safeUrl(article.urlToImage) || "",
+      source: article.source?.name || "Unknown source",
+      publishedAt: article.publishedAt || "",
+      savedAt: new Date().toISOString(),
+    });
+  }
+
+  persistSaved();
+  updateSavedCount();
+}
+
+function updateSavedCount() {
+  savedCountEl.textContent = `(${savedArticles.length})`;
+  exportSavedBtn.disabled = savedArticles.length === 0;
+}
+
+function setupSaveButton(button, article) {
+  const url = safeUrl(article.url);
+  updateSaveButton(button, isSaved(url));
+
+  button.addEventListener("click", () => {
+    toggleSave(article);
+    updateSaveButton(button, isSaved(url));
+  });
+}
+
+function updateSaveButton(button, saved) {
+  button.textContent = saved ? "★ Saved" : "☆ Save";
+  button.classList.toggle("saved", saved);
+  button.setAttribute("aria-pressed", String(saved));
+}
+
+function renderSavedView() {
+  savedGrid.innerHTML = "";
+
+  if (savedArticles.length === 0) {
+    savedGrid.innerHTML =
+      '<div class="empty">No saved articles yet. Tap ☆ Save on any story to read it offline.</div>';
+    return;
+  }
+
+  [...savedArticles].reverse().forEach((article) => {
+    const card = document.createElement("article");
+    card.className = "news-card";
+
+    const image = article.urlToImage || PLACEHOLDER;
+    const description =
+      article.summary || article.description || "Read the complete story from the original source.";
+    const ago = timeAgo(article.publishedAt);
+
+    card.innerHTML = `
+      <img src="${escapeHTML(image)}" alt="" loading="lazy">
+
+      <div class="news-content">
+        <div class="source">
+          ${escapeHTML(article.source)}${ago ? ` <span class="time">• ${ago}</span>` : ""}
+        </div>
+
+        <h3>${escapeHTML(article.title)}</h3>
+
+        <p>${escapeHTML(description)}</p>
+
+        <div class="card-actions">
+          <a
+            class="read-more"
+            href="${escapeHTML(article.url)}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Read full article →
+          </a>
+          <button class="save-btn saved" aria-label="Remove from saved">✕ Remove</button>
+        </div>
+      </div>
+    `;
+
+    attachImageFallback(card);
+
+    card.querySelector(".save-btn").addEventListener("click", () => {
+      savedArticles = savedArticles.filter((a) => a.url !== article.url);
+      persistSaved();
+      updateSavedCount();
+      renderSavedView();
+    });
+
+    savedGrid.appendChild(card);
+  });
+}
+
+function exportSavedArticles() {
+  if (savedArticles.length === 0) return;
+
+  const entries = savedArticles.map((article, index) => {
+    const date = article.publishedAt ? new Date(article.publishedAt).toLocaleString() : "";
+    return (
+      `${index + 1}. ${article.title}\n` +
+      `${article.source}${date ? " • " + date : ""}\n` +
+      `${article.summary || article.description}\n` +
+      `Read online: ${article.url}`
+    );
+  });
+
+  const text =
+    `NewsScope — Saved Articles (exported ${new Date().toLocaleString()})\n` +
+    `${entries.length} article${entries.length === 1 ? "" : "s"}\n\n` +
+    entries.join("\n\n---\n\n");
+
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `newsscope-saved-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
+function toggleSavedView() {
+  const showingSaved = savedSection.hidden; // about to switch to saved view
+  liveView.hidden = showingSaved;
+  savedSection.hidden = !showingSaved;
+  savedViewLabel.textContent = showingSaved ? "← Back to news" : "📥 Saved";
+  savedCountEl.hidden = showingSaved;
+
+  if (showingSaved) renderSavedView();
+}
+
+savedViewBtn.addEventListener("click", toggleSavedView);
+exportSavedBtn.addEventListener("click", exportSavedArticles);
 
 // ---------- Rendering ----------
 
@@ -143,18 +351,22 @@ function renderCards(articles) {
 
         <p>${escapeHTML(description)}</p>
 
-        <a
-          class="read-more"
-          href="${escapeHTML(safeUrl(article.url))}"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Read full article →
-        </a>
+        <div class="card-actions">
+          <a
+            class="read-more"
+            href="${escapeHTML(safeUrl(article.url))}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Read full article →
+          </a>
+          <button class="save-btn" aria-label="Save for offline reading">☆ Save</button>
+        </div>
       </div>
     `;
 
     attachImageFallback(card);
+    setupSaveButton(card.querySelector(".save-btn"), article);
     newsGrid.appendChild(card);
   });
 }
@@ -434,4 +646,5 @@ categorySelect.addEventListener("change", () => {
 });
 
 // Start application
+updateSavedCount();
 getLocation();

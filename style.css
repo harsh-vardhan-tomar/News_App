@@ -158,11 +158,80 @@ button:hover {
 }
 
 .read-more {
-  margin-top: auto;
   color: #1976d2;
   text-decoration: none;
   font-weight: bold;
   font-size: 14px;
+}
+
+/* ---------- Save-for-offline ---------- */
+.hero-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+#savedViewBtn {
+  background: #101828;
+}
+
+#savedViewBtn:hover {
+  background: #050a14;
+}
+
+#savedCount {
+  opacity: 0.75;
+}
+
+.card-actions {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.save-btn {
+  background: transparent;
+  border: 1px solid #d0d5dd;
+  color: #667085;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.save-btn:hover {
+  border-color: #1976d2;
+  color: #1976d2;
+  background: transparent;
+}
+
+.save-btn.saved {
+  background: #fff7e6;
+  border-color: #f2b705;
+  color: #a66b00;
+}
+
+.saved-section {
+  margin-bottom: 30px;
+}
+
+.export-btn {
+  background: #1976d2;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+
+.export-btn:disabled {
+  background: #d0d5dd;
+  cursor: not-allowed;
+}
+
+.saved-section[hidden],
+#liveView[hidden] {
+  display: none;
 }
 
 .empty {
@@ -206,6 +275,14 @@ footer {
   .controls select,
   button {
     width: 100%;
+  }
+
+  .hero-actions {
+    width: 100%;
+  }
+
+  .hero-actions button {
+    flex: 1;
   }
 }
 /* ---------- Smooth scrolling + sticky controls ---------- */
